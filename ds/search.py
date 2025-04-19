@@ -1,5 +1,4 @@
 # Import necessary libraries
-import json  # Can be useful if your search API returns structured JSON
 import re
 
 from ds.llm.client import LLMClient
@@ -28,7 +27,7 @@ Action: Final Answer[Kotlin is the preferred programming language for Android de
 BEGIN!
 """
 
-llm_client = LLMClient(model="deepseek-chat")
+llm_client = LLMClient(model="deepseek-reasoner")
 
 
 # --- ReAct Agent Logic ---
@@ -48,7 +47,7 @@ def react_agent(question: str, max_steps: int = 5):
 
     # Initialize the 'scratchpad' or history for the current reasoning chain
     history = f"Question: {question}\n"
-    print(f"--- Starting ReAct Agent ---")
+    print("--- Starting ReAct Agent ---")
     print(f"Initial Question: {question}\n")
 
     for step in range(max_steps):
@@ -117,7 +116,7 @@ def react_agent(question: str, max_steps: int = 5):
             print(f"Observation: {observation}")
         elif action_type == "Final Answer":
             # Agent has decided it has the answer
-            print(f"\n--- Final Answer Determined ---")
+            print("\n--- Final Answer Determined ---")
             return action_input  # Return the final answer
         else:
             # This case should ideally not be reached if the regex and action types are correct
