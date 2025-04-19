@@ -38,7 +38,8 @@ print(answer)
 The following environment variables need to be set:
 
 - `DEEPSEEK_API_KEY`: Your DeepSeek API key
-- `SERPER_API_KEY`: Your Serper API key for search, you can get it from [here](https://serper.dev/api-key)
+- `JINA_AI_API_KEY`: Your Jina AI API key for search, you can get it from [here](https://jina.ai/api-key)
+- `SERPER_API_KEY`[Optional]: Another option is to use Serper API key for search, you can get it from [here](https://serper.dev/api-key)
 
 ## License
 
