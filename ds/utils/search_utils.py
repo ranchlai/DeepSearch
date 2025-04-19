@@ -1,7 +1,16 @@
+import codecs
 import json
 import os
 
 import requests
+
+
+def decode_escaped_utf8(text):
+    # First decode the Python string literal escape sequences
+    decoded_bytes = codecs.escape_decode(text.encode("utf-8"))[0]
+
+    # Then decode as UTF-8
+    return decoded_bytes.decode("utf-8", errors="replace")
 
 
 def search_google(query: str, gl: str = "cn"):
@@ -34,12 +43,17 @@ def search_jina_ai(query: str):
     url = f"https://s.jina.ai/?q={query}"
     headers = {
         "Authorization": os.getenv("JINA_AI_API_KEY"),
-        "X-Respond-With": "no-content",
+        "Accept": "application/json",
+        "X-Return-Format": "markdown",
     }
 
     response = requests.get(url, headers=headers)
-
-    return response.text
+    result = response.json()
+    text = ""
+    for item in result["data"]:
+        # title', 'url', 'description', 'date', 'content'
+        text += f"{item.get('title', '')}\n{item.get('description', '')}\n{item.get('url', '')}\n{item.get('date', '')}\n---\n"
+    return text
 
 
 def search(query: str):
