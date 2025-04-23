@@ -32,6 +32,29 @@ answer = react_agent(question, max_steps=5)
 print(answer)
 ```
 
+### Flask Web Service
+
+You can run DeepSearch as a web service using Flask:
+
+```bash
+# Run the Flask app
+python app.py
+```
+
+This will start a web service at http://localhost:800/search that accepts GET requests with a query parameter 'q'.
+
+Example:
+```
+http://localhost:800/search?q=小神童3号可以在平安好车主app上购买吗?
+```
+
+The response is returned in JSON format:
+```json
+{
+  "query": "小神童3号可以在平安好车主app上购买吗?",
+  "result": "根据搜索结果，没有发现小神童3号产品可以在平安好车主app上购买的直接信息..."
+}
+```
 
 ## Environment Variables
 

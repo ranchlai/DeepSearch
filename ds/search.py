@@ -1,145 +1,230 @@
 # Import necessary libraries
 import re
+from typing import Optional
 
 from ds.llm.client import LLMClient
 from ds.utils.search_utils import search
 
-REACT_PROMPT = """You are an AI assistant that answers questions by reasoning step-by-step and using tools when needed.
+# --- Prompt Components ---
+SEARCH_PROMPT = """# You are an search assistant that answers questions by searching and reasoning.
+When you use the Search tool, carefully analyze the search results to extract relevant information.
+You can search at most {max_steps} times.
 
-AVAILABLE TOOLS:
-1.  **Search[query]**: Use this to find information you don't have or need to verify. Formulate a specific search query.
-2.  **Final Answer[answer]**: Use this ONLY when you have enough information to provide a complete and accurate answer to the original question.
 
-PROCESS:
-Follow this cycle strictly:
-1.  **Thought**: Analyze the current state (question, previous observations). Decide your next step: either search for more info or provide the final answer. Explain your reasoning briefly.
-2.  **Action**: State the action you will take. Use EXACTLY the format `Action: ToolName[input]`. Choose only ONE action per step.
-3.  **Observation**: The result of your action (e.g., search results) will be provided by the system. You will use this in your next Thought.
+## AVAILABLE TOOLS:
+{tool_definitions}
 
-EXAMPLE:
-Question: What is the main programming language used for Android development?
-Thought: The user is asking about the primary language for Android apps. I should search to confirm the current standard language.
-Action: Search[main programming language for Android development]
-Observation: Search results indicate Kotlin is now the preferred language for Android development, although Java is also widely used.
-Thought: The search confirms Kotlin is preferred, but Java is also relevant. I can now formulate the final answer including both.
-Action: Final Answer[Kotlin is the preferred programming language for Android development, recommended by Google. Java is also widely used, especially for older codebases.]
+## NOTES:
+Each step consists of one pair of observation and action
+1. **Observation**: Observe the current state (question and any previous search results), and decide your next step. For the first step, Do not conclude any search results.
+2. **Action**: State the action you will take. Use EXACTLY the format `Action: ToolName[input]`. Choose only ONE action per step.
+Output your Observation and Action in the following format. Please only output one observation and one action.
+```
+Observation: [your observation]
+Action: [your action]
+```
 
-BEGIN!
+## PROGRESS
+This is try {step} of {max_steps} max tries.
+
+## ACTIONS AND OBSERVATIONS of PREVIOUS STEPS:
+{history}
+
+## CURRENT SEARCH RESULTS:
+{search_results}
+
+## USER'S QUERY:
+{question}
+
+Now begin!
 """
 
-llm_client = LLMClient(model="deepseek-reasoner")
+TOOL_DEFINITIONS = {
+    "Search": {
+        "description": "Use this to find information you don't have or need to verify. Formulate a specific search query.",
+        "format": "Search[query]",
+    },
+    "Finalize": {
+        "description": "Use this ONLY when you have enough information to provide a complete and accurate answer to the original question.",
+        "format": "Finalize[answer]",
+    },
+}
 
 
-# --- ReAct Agent Logic ---
-def react_agent(question: str, max_steps: int = 5):
-    """
-    Runs the ReAct agent loop for a given question.
+class SearchAgent:
+    """Search agent for answering questions using LLM reasoning and tools."""
 
-    Args:
-        question: The user's question to answer.
-        max_steps: Maximum number of Thought-Action-Observation cycles allowed.
+    def __init__(self):
+        self.llm_client = LLMClient(model="deepseek-reasoner")
 
-    Returns:
-        The final answer string, or an error/status message if it fails.
-    """
-    # Get the base prompt structure
-    base_prompt = REACT_PROMPT
+    def build_prompt(
+        self,
+        question: str,
+        history: str,
+        step: int,
+        max_steps: int,
+        search_results: str = None,
+    ) -> str:
+        """Build the full prompt from the components."""
 
-    # Initialize the 'scratchpad' or history for the current reasoning chain
-    history = f"Question: {question}\n"
-    print("--- Starting ReAct Agent ---")
-    print(f"Initial Question: {question}\n")
+        # Add tool definitions
+        tool_definitions = ""
+        for i, (tool_name, tool_info) in enumerate(TOOL_DEFINITIONS.items(), 1):
+            tool_definitions += (
+                f"{i}.  **{tool_info['format']}**: {tool_info['description']}\n"
+            )
 
-    for step in range(max_steps):
-        print(f"--- Step {step + 1}/{max_steps} ---")
+        if not search_results:
+            search_results = (
+                "No search results yet for the first step."
+                if step == 0
+                else "No search results found"
+            )
 
-        # Prepare the prompt for the LLM by combining the base instructions and current history
-        current_prompt = (
-            base_prompt + history + "Thought:"
-        )  # Prompt the LLM to start with a thought
-        # print(f"Sending Prompt to LLM:\n{current_prompt}\n") # Uncomment for deep debugging
+        history_str = ""
+        for i, h in enumerate(history):
+            history_str += f"Step {i+1}:\n{h}\n---\n"
+        if not history_str:
+            history_str = "No history yet."
 
-        # 1. Generate Thought and Action using the LLM
-        llm_response = llm_client.simple_query(current_prompt)
-        # print(f"LLM Raw Response:\n{llm_response}\n") # Uncomment for deep debugging
+        prompt = SEARCH_PROMPT.format(
+            history=history_str,
+            search_results=search_results,
+            question=question,
+            tool_definitions=tool_definitions,
+            step=step + 1,
+            max_steps=max_steps,
+        )
 
-        if not llm_response:
-            print("Agent Error: Failed to get response from LLM. Stopping.")
-            return "Agent stopped due to LLM communication failure."
+        return prompt
 
-        # Append the LLM's thought process (which should precede the action) to history
-        # The LLM is prompted for "Thought:", so its response starts there.
-        history += f"Thought: {llm_response}\n"
-        print(f"Thought: {llm_response}")  # Display the thought process
+    def parse_action(
+        self, llm_response: str, step: int
+    ) -> tuple[Optional[str], Optional[str]]:
+        """
+        Parse the action type and input from the LLM's response.
 
-        # 2. Parse the Action from the LLM's response
-        # Use regex to find "Action: ToolName[Input]" pattern. Handles multi-line inputs within brackets.
+        Args:
+            llm_response: The response from the LLM
+            step: The current step number (for error reporting)
+
+        Returns:
+            Tuple of (action_type, action_input) or (None, error_message) if parsing fails
+        """
         action_match = re.search(
-            r"Action:\s*(Search|Final Answer)\[(.*?)\]",
+            r"Action:\s*(Search|Finalize)\[(.*?)\]",
             llm_response,
             re.DOTALL | re.IGNORECASE,
         )
 
         if not action_match:
-            # If no valid action is found, the agent might be stuck or the LLM deviated.
-            print(
-                "Agent Warning: Could not parse a valid action from the LLM response."
-            )
             # Check if the LLM tried to give a final answer without the correct format
-            if "final answer" in llm_response.lower():
-                answer_part = llm_response.split(":")[-1].strip()  # Simple heuristic
-                print(
-                    f"Attempting to extract final answer heuristically: {answer_part}"
-                )
-                return answer_part
-            history += "Observation: Failed to parse action. Stopping.\n"
-            return f"Agent stopped: Could not parse action after step {step + 1}. Review LLM response and prompt. History:\n{history}"
+            if "Finalize" in llm_response.lower():
+                answer_part = llm_response.split(":")[-1].strip()
+                return "Finalize", answer_part
 
-        # Fix the capitalization issue by standardizing action type format
-        action_type = action_match.group(1).strip().lower()
+            return None, f"Agent stopped: Could not parse action after step {step + 1}."
+
+        # Standardize action type format
+        action_type = action_match.group(1).strip()
+        action_type = "Search" if action_type.lower() == "search" else "Finalize"
         action_input = action_match.group(2).strip()
 
-        # Standardize action type names for comparison
-        if action_type.lower() == "search":
-            action_type = "Search"
-        elif action_type.lower() == "final answer":
-            action_type = "Final Answer"
+        return action_type, action_input
 
-        history += f"Action: {action_type}[{action_input}]\n"  # Log the successfully parsed action
-        print(f"Action: {action_type}[{action_input}]")
+    def execute_action(
+        self, action_type: str, action_input: str
+    ) -> tuple[Optional[str], Optional[str]]:
+        """
+        Execute the specified action and return appropriate results.
 
-        # 3. Execute the Action and Get Observation
+        Args:
+            action_type: The type of action to execute ("Search" or "Finalize")
+            action_input: The input for the action
+
+        Returns:
+            Tuple of (search_results, final_answer) where one will be None
+        """
         if action_type == "Search":
-            # Call the (dummy or real) search API
-            observation = search(action_input)
-            history += f"Observation: {observation}\n"
-            print(f"Observation: {observation}")
-        elif action_type == "Final Answer":
-            # Agent has decided it has the answer
-            print("\n--- Final Answer Determined ---")
-            return action_input  # Return the final answer
+            # Perform search and store results for next observation
+            results = search(action_input)
+            return results, None
+        elif action_type == "Finalize":
+            return None, action_input
         else:
-            # This case should ideally not be reached if the regex and action types are correct
-            print(f"Agent Error: Unknown action type '{action_type}'. Stopping.")
-            return f"Agent stopped due to unknown action type '{action_type}' after step {step + 1}."
+            return None, f"Agent stopped due to unknown action type '{action_type}'."
 
-        # Optional: Check for excessive history length if token limits are a concern
-        # if len(current_prompt) > 3500: # Example token budget check
-        #     print("Warning: Prompt approaching token limits, may need truncation strategy.")
+    def run(self, question: str, max_steps: int = 10) -> str:
+        """
+        Runs the ReAct agent loop for a given question.
 
-    # If the loop completes without a "Final Answer" action
-    print("\nAgent Warning: Maximum steps reached without providing a final answer.")
-    return f"Agent stopped after {max_steps} steps. The question might be too complex, require more steps, or the agent got stuck. Final history:\n{history}"
+        Args:
+            question: The user's question to answer.
+
+        Returns:
+            The final answer string, or an error/status message if it fails.
+        """
+
+        # Track the latest search results to include in the next observation context
+        latest_search_results = None
+        history = []
+        for step in range(max_steps):
+            print(f"--- Step {step + 1}/{max_steps} ---")
+
+            # Get the base prompt structure
+            current_prompt = self.build_prompt(
+                question, history, step, max_steps, latest_search_results
+            )
+            # 1. Generate observation and Action using the LLM
+            llm_response = self.llm_client.simple_query(
+                current_prompt, return_reasoning=False, verbose=True
+            )
+            if not llm_response:
+                return "Agent stopped due to LLM communication failure."
+
+            # Append the LLM's observation process to history
+            history += [f"{llm_response}\n"]
+
+            # 2. Parse the Action from the LLM's response
+            action_type, action_input = self.parse_action(llm_response, step)
+
+            if action_type is None:
+                return action_input  # Return the error message
+
+            # 3. Execute the Action
+            search_results, final_answer = self.execute_action(
+                action_type, action_input
+            )
+
+            if final_answer:
+                return final_answer
+
+            latest_search_results = search_results
+
+        # If the loop completes without a "Finalize" action
+        return f"Agent stopped after {max_steps} steps without reaching a final answer."
 
 
 # --- Main Execution Block ---
 if __name__ == "__main__":
+    # Example usage with default configuration
+    agent = SearchAgent()
 
-    # question = "What is the capital of France and what is the ReAct pattern for LLM agents?"
-    question = "小神童3号可以在平安好车主app上购买吗？"
+    # Or with custom configuration
+    # custom_config = AgentConfig(model="gpt-4", max_steps=10, debug=True)
+    # agent = SearchAgent(config=custom_config)
 
-    # Run the agent
-    final_answer = react_agent(question, max_steps=5)
+    # Example questions
+    questions = [
+        "What is the capital of France and what is the ReAct pattern for LLM agents?",
+        "小神童3号可以在平安好车主app上购买吗？",
+        "昆仑健康乐享年年终身护理保险的有效保险金额是什么意思？",
+        "三国演义中，刘备的妻子是谁？",
+    ]
+
+    # Run the agent with one question
+    question = questions[-1]  # Choose question index
+    final_answer = agent.run(question)
 
     # Print the final result
     print("\n--- Agent Execution Finished ---")
