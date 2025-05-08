@@ -27,7 +27,7 @@ pip install -e .
 from ds.search import react_agent
 
 # Run a ReAct agent with a question
-question = "小神童3号可以在平安好车主app上购买吗?"
+question = "2008年奥运会中国拿了几块金牌?"
 answer = react_agent(question, max_steps=5)
 print(answer)
 ```
@@ -45,14 +45,14 @@ This will start a web service at http://localhost:800/search that accepts GET re
 
 Example:
 ```
-http://localhost:800/search?q=小神童3号可以在平安好车主app上购买吗?
+http://localhost:800/search?q=2008年奥运会中国拿了几块金牌?
 ```
 
 The response is returned in JSON format:
 ```json
 {
-  "query": "小神童3号可以在平安好车主app上购买吗?",
-  "result": "根据搜索结果，没有发现小神童3号产品可以在平安好车主app上购买的直接信息..."
+  "query": "2008年奥运会中国拿了几块金牌?",
+  "result": "..."
 }
 ```
 
